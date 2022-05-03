@@ -6,7 +6,7 @@
 	<title></title>
 </head>
 <body>
-	<div id='bbox'></div>
+	<div id='root'></div>
 	<script type="text/javascript" src='leflex.js?<?php echo rand()*3746283 ?>'></script>
 	<script type="text/javascript" src='component.js?<?php echo rand()*3746283 ?>'></script>
 	<script type="text/javascript" src='main.js?<?php echo rand()*3746283 ?>'></script>

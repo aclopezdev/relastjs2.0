@@ -1,14 +1,24 @@
-/*jshint esversion:6*/
+/*jshint esversion:8*/
 Object.prototype.copy = function()
 {
 	return JSON.parse(JSON.stringify(this));
 };
-// ************************************************************************************************************************
-// ************************************************************************************************************************
-// ************************************************************************************************************************
-// ************************************************************************************************************************
+Array.prototype.copy = function()
+{
+	let buffer = [];
+	for(let e of this)
+		buffer.push(e);
+	for(let e in this)
+		if(this.hasOwnProperty(e))
+			buffer[e] = this[e];
+	return buffer;
+};
+/* ************************************************************************************************************************ */
+/* ************************************************************************************************************************ */
+/* ************************************************************************************************************************ */
+/* ************************************************************************************************************************ */
 
-const Extends = (_class, _parent, args) =>
+const Extends = (_class, _parent, args={}) =>
 {
 	if(!_class || !_parent) return;
 	if(typeof _class !== 'function' || typeof _parent !== 'function') return;
@@ -19,22 +29,115 @@ const Extends = (_class, _parent, args) =>
 
 	return _class;
 };
-const New = (_class, args) =>
+const New = (_class, args={}) =>
 {
 	if(!_class) return null;
 	if(typeof _class !== 'function') return null;
 	if(!window[_class.name])
 		window[_class.name] = _class;
+	let slaves = false;
+	if(args.slaves)
+	{
+		slaves = true;
+		Leflex_slaves.add_slave(args.slaves);
+		delete args.slaves;
+	}
 	if(_class.extends)
 		_class = Extends(_class, _class.extends, args);
 	let obj = new _class(args);
+	if(slaves)
+		Leflex_slaves._comps[obj.name()] = obj;
 	return obj;
 };
 
-// ************************************************************************************************************************
-// ************************************************************************************************************************
-// ************************************************************************************************************************
-// ************************************************************************************************************************
+function load_html(src)
+{
+	let prom = new Promise((resolve) =>
+	{
+		let xhr = new XMLHttpRequest();
+		xhr.open('GET', src, true);
+		xhr.send();
+
+		xhr.onload = (args) =>
+		{
+			resolve(xhr.responseText);
+		};
+	});
+	return prom;
+}
+
+function load_script(src)
+{
+	let prom = new Promise((resolve) =>
+	{
+		let script = document.createElement('script');
+		script.type = 'text/javascript';
+		script.src = src;
+		document.head.appendChild(script);
+		script.onload = (ev) =>
+		{
+			resolve(ev);
+		};
+	});
+	return prom;
+}
+
+const include = async (src, name=undefined) =>
+{
+	if(!src) return null;
+	if(typeof src !== 'string') return null;
+	if(src.match(/\.html/g))
+	{
+		let html = '[No HTML]';
+		if(!window.htmls)
+		{
+			window.htmls = {};
+			window.htmlsl = 0;
+		}
+		if(!window.htmls[name])
+		{
+			window.htmls[name] = false;
+			window.htmlsl++;
+		}
+		let resp = await load_html(`${src}?${Math.floor(Math.random() * Date.now())}`).then((data) =>
+			{
+				html = data;
+				window.htmls[name] = true;
+				if(!window[name])
+					window[name] = html;
+				return html;
+			});
+		return html;
+	}else if(src.match(/\.js/g))
+	{
+		let props = [];
+		for(let p in window)
+		{
+			if(!window.hasOwnProperty(p)) continue;
+			props.push(p);
+		}
+		let mods = await load_script(`${src}?${Math.floor(Math.random() * Date.now())}`).then((ev)=>{
+			let new_props = [];
+			for(let p in window)
+			{
+				if(!window.hasOwnProperty(p)) continue;
+				new_props.push(p);
+			}
+			let buffer = new_props.filter(x => props.indexOf(x) === -1);
+			let diffs = {};
+			for(let c of buffer)
+				diffs[c] = window[c];
+			return diffs;
+		});
+		return mods;
+	}
+	return '[Not handled file]';
+};
+
+/* ************************************************************************************************************************ */
+/* ************************************************************************************************************************ */
+/* ************************************************************************************************************************ */
+/* ************************************************************************************************************************ */
 
 function Leflex(config)
 {
@@ -47,6 +150,8 @@ function Leflex(config)
 	let _states = {};
 	let _actions = {};
 	let _prev_states = {};
+	let _flags = config.flags || {};
+	// console.log(_flags);
 
 	let _view = ``;
 	let _styles = ``;
@@ -56,6 +161,8 @@ function Leflex(config)
 	let _remover_attrs_buffer = [];
 
 	let _conditions = {};
+	let _loops = {};
+	let _effects = {states: {}, effect: {} };
 
 /* 	SETTERS AND GETTERS ---------------------------------------------------------------------- */
 	this.name = () => {	return _name; };
@@ -69,6 +176,48 @@ function Leflex(config)
 				this._bbox.removeAttribute(`id`);
 		}
 	};
+	this.effect = (f, states=[]) =>
+	{
+		let buffer = [];
+		if(Array.isArray(states))
+		{
+			for(let s of states)
+				if(_states[s])
+					buffer.push(s);
+		}else{
+			if(_states[states])
+				buffer.push(states);
+		}
+
+		if(buffer.length === 0)
+		{
+			for(let s in _states)
+				if(_states.hasOwnProperty(s))
+					buffer.push(s);
+		}
+		
+		let id = Math.ceil(Math.random() * Date.now());
+		_effects.states[id] = buffer;
+		_effects.effect[id] = f;
+	};
+	let call_effects = (state) =>
+	{
+		let ids = [];
+		for(let e in _effects.states)
+		{
+			if(!_effects.states.hasOwnProperty(e)) continue;
+			for(let s of _effects.states[e])
+			{
+				if(s === state)
+					ids.push(e);
+			}
+		}
+		for(let id of ids)
+		{
+			if(_effects.effect[id])
+				_effects.effect[id]({state: state});
+		}
+	};
 	this.state = (k, v = undefined) =>
 	{
 		if(v === undefined || v === null)
@@ -77,6 +226,7 @@ function Leflex(config)
 			sync_states();
 			_states[k] = v;
 			this.render();
+			call_effects(k);
 		}
 	};
 	this.action = (k, action = undefined) =>
@@ -115,6 +265,11 @@ function Leflex(config)
 			_prev_states[s] = _states[s];
 		}
 	};
+	let remove_all_comps = () =>
+	{
+		_subclasses = {};
+		_childs = {};
+	};
 	let str_2_comp_bbox = (str) => 
 	{
 		for(let c in _subclasses)
@@ -129,7 +284,7 @@ function Leflex(config)
 			if(!window[c]) continue;
 			if(!window[c].name) continue;
 
-			let strRegex = `\\<${window[c].name}\\s+[a-z|A-Z|0-9|\\'|\\"|\\=|\\_|\\s*]*\\s*\\/?\\>`;
+			let strRegex = `\\<${window[c].name}\\s+[a-z|A-Z|0-9|\\'|\\"|\\=|\\_|\\[|\\]|\\:|\\s*]*\\s*\\/?\\>`;
 			let regex = new RegExp(strRegex, `g`);
 			let match = str.match(regex);
 			if(match)
@@ -140,11 +295,12 @@ function Leflex(config)
 					{
 						let id = Math.ceil(Math.random() * 324233);
 						let name = `${c}_${id}`;
-						this.new_comp({class: window[c], name: name, id:id});
 
-						let args_regex = /\s+[a-z|A-Z]+[0-9|\_|\-|\s*]?\=+[\s*|\'|\"]+[a-z|A-Z|0-9|\_|\-|\s]+[\'|\"]+/g;
-						let args = match[0].match(args_regex);
+						let args_regex = /\s+[a-z|A-Z]+[0-9|\_|\-|\s*]?\=+[\s*|\'|\"]+[a-z|A-Z|0-9|\_|\-|\s|\[|\]|\:]+[\'|\"]+/g;
+						let args = c2.match(args_regex);
 						let class_styles = ``;
+						let flags = {};
+						let comp_args = {};
 						if(args)
 						{
 							for(let a of args)
@@ -154,7 +310,20 @@ function Leflex(config)
 								if(split.length <= 1) continue;
 								let arg_name = split[0];
 								let arg_val = split[1].substring(1, split[1].length - 1);
-								_subclasses[name].conf[arg_name] = arg_val;
+								let flags_match = arg_val.match(/\[flag:[a-z|A-Z|_|0-9]+\]/g);
+								if(flags_match)
+								{
+									if(flags_match.length > 0)
+									{
+										let flag = flags_match[0];
+										flag = flag.replace('[', '').replace(']', '').split(':');
+										if(flag.length == 2)
+											flags[arg_name] = flag[1];
+									}
+								}else{
+									comp_args[arg_name] = arg_val;
+								}
+								// _subclasses[name].conf[arg_name] = arg_val;
 								if(arg_name.trim().toLowerCase() === `class`)
 								{
 									class_styles = arg_val;
@@ -162,6 +331,7 @@ function Leflex(config)
 							}
 						}
 
+						this.new_comp({class: window[c], name: name, id:id, flags: flags, args: comp_args});
 						str = str.replace(c2, `<section comp:id='${config.name}_${name}' id='${config.name}_${name}' class='${class_styles}'></section>`);
 					}
 				}
@@ -277,6 +447,7 @@ function Leflex(config)
 					{
 						_prev_states[state_name] = _states[state_name];
 						_states[state_name] = ev.target.value;
+						call_effects(state_name);
 					};	
 				}else if(input.type.toLowerCase() === `checkbox` || input.type.toLowerCase() === `radio`)
 				{
@@ -332,8 +503,59 @@ function Leflex(config)
 			}
 			try{
 				let _then = if_sentences(condition.then);
+				_then = for_sentences(_then);
 				let _else = if_sentences(condition.else);
+				_else = for_sentences(_else);
 				view = view.replace(i, eval(question) ? _then : _else);
+			}catch(e)
+			{
+			}
+		}
+		return view;
+	};
+	let for_sentences = (view) =>
+	{
+		let fors = view.match(/\[for:[0-9]+\]/g);
+		if(!fors) return view;
+		for(let i of fors)
+		{
+			let loop = _loops[i.replace(`[for:`, ``).replace(`]`, ``)];
+			if(!loop) continue;
+			let states_match = loop.for.match(/\[state:[a-z|A-Z|0-9|_|-]*\]/g);
+			let looper = loop.for;
+			if(states_match)
+			{
+				let __view = ``;
+				for(let s of states_match)
+				{
+					let state_name = s.replace(`[state:`, ``).replace(`]`, ``);
+					let state = _states[state_name];
+					if(state !== undefined && state !== null)
+					{
+						looper = looper.replace(s, state);
+						if(Array.isArray(state))
+						{
+							for(let sv of state)
+							{
+								__view += `${loop.block}\n`;
+								if(typeof sv === 'object')
+								{
+									for(let k in sv)
+									{
+										if(!sv.hasOwnProperty(k)) continue;
+										let regex = new RegExp(`\\[${k}\\]*`, `g`);
+										__view = __view.replace(regex, sv[k]);
+									}
+								}
+							}
+						}
+						view = view.replace(i, `${__view}`);
+					}
+				}
+			}
+			try{
+				view = for_sentences(view);
+				view = if_sentences(view);
 			}catch(e)
 			{
 			}
@@ -358,7 +580,10 @@ function Leflex(config)
 	{
 		if(!this._bbox) return;
 
+		remove_all_comps();
+
 		let view = _view;
+		view = for_sentences(view);
 		view = if_sentences(view);
 		view = str_2_comp_bbox(view);
 		view = str_2_readable_states(view);
@@ -380,7 +605,147 @@ function Leflex(config)
 		_conditions[name] = __if;
 		return `[if:${name}]`;
 	};
+	this.for = (iterator, iteration) =>
+	{
+		let __for = {
+			for: iterator,
+			block: iteration
+		};
+		let name = Math.ceil(Math.random() * 67153765);
+		_loops[name] = __for;
+		return `[for:${name}]`;
+	};
 
 /* 	START ENGINE ---------------------------------------------------------------------- */
 	_bbox = this.bbox(config.bbox);
 }
+
+Leflex.new_app = async function(_class, config={})
+{
+	let loader = null;
+	function start_app()
+	{
+		delete window.htmlsl;
+		window.clearInterval(loader);
+		loader = undefined;
+		let slaves = config.slaves || undefined;
+		let app = New(_class, config);
+		app.init();
+		if(slaves)
+			Leflex_slaves._main = app;
+		return app;
+	}
+	let prom = new Promise(resolve =>
+	{
+		let c = 0;
+		loader = window.setInterval(()=>
+		{
+			if(!window.htmls)
+			{
+				let app = start_app();
+				resolve(app);
+				return app;
+			}
+			for(let h in window.htmls)
+			{
+				if(!window.htmls.hasOwnProperty(h)) continue;
+				if(window.htmls[h])
+				{
+					delete window.htmls[h];
+					c++;
+				}
+			}
+			if(c >= window.htmlsl)
+			{
+				let app = start_app();
+				resolve(app);
+				return app;
+			}
+		}, 100);
+	});
+	return prom;
+};
+
+/* ************************************************************************************************************************ */
+/* ************************************************************************************************************************ */
+/* ************************************************************************************************************************ */
+/* ************************************************************************************************************************ */
+
+const Leflex_slaves = {
+	_buffer: {},
+	_main: null,
+	_comps: {},
+	add_slave: function(slave, comp = undefined)
+	{
+		if(!slave) return;
+		if(comp)
+			this._comps[comp.name()] = comp;
+		if(Array.isArray(slave))
+		{
+			for(let w of slave)
+				this.add_slave(w);
+		}else{
+			this._buffer[slave.name] = New(slave);
+		}
+	},
+	aid_flag: function(slave, flag, caller=undefined, args = {})
+	{
+		if(!slave) return;
+		if(Array.isArray(slave))
+		{
+			for(let s of slave)
+				aid_flag(s, f, caller, args);
+		}else{
+			if(!this._buffer[slave]) return;
+			if(!this._buffer[slave].aid_flag) return;
+			if(Array.isArray(flag))
+			{
+				for(let f of flag)
+					aid_flag(slave, f, caller, args);
+			}else
+			{
+				args.root = this._main;
+				args.comps = this._comps;
+				args.caller = caller;
+				this._buffer[slave].aid_flag(flag, args);
+			}
+		}
+	}
+};
+
+function Slave(config)
+{
+	let _flags = [];
+	let _actions = [];
+
+	this.get_flags = () =>
+	{
+		return _flags.copy();
+	};
+
+	this.flag = (k, actions, comps) =>
+	{
+		_flags[k] = {
+			actions: actions,
+			comps: comps
+		};
+	};
+	this.aid_flag = (k, args={}) =>
+	{
+		if(!_flags[k]) return;
+		for(let a of _flags[k].actions)
+		{
+			if(_actions[a])
+				_actions[a](args);
+		}
+	};
+	this.action = (k, action) =>
+	{
+		_actions[k] = action;
+	};
+}
+
+/* ************************************************************************************************************************ */
+/* ************************************************************************************************************************ */
+/* ************************************************************************************************************************ */
+/* ************************************************************************************************************************ */
